@@ -1,12 +1,9 @@
 package com.example.krestproxy.service;
 
-import com.example.krestproxy.config.CacheProperties;
 import com.example.krestproxy.config.KafkaProperties;
 import com.example.krestproxy.dto.MessageDto;
 import com.example.krestproxy.exception.ExecutionNotFoundException;
 import com.example.krestproxy.exception.KafkaOperationException;
-import com.github.benmanes.caffeine.cache.Cache;
-import com.github.benmanes.caffeine.cache.Caffeine;
 import org.apache.avro.generic.GenericRecord;
 import org.apache.commons.pool2.ObjectPool;
 import org.apache.kafka.clients.consumer.Consumer;
@@ -14,6 +11,7 @@ import org.apache.kafka.common.TopicPartition;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.cache.annotation.Cacheable;
 import org.springframework.stereotype.Service;
 
 import java.nio.charset.StandardCharsets;
@@ -30,20 +28,13 @@ public class KafkaMessageService {
     private static final String EXEC_IDS_TOPIC = "execids";
     private final ObjectPool<Consumer<Object, Object>> consumerPool;
     private final KafkaProperties kafkaProperties;
-    private final Cache<String, ExecTime> execTimeCache;
 
     @Autowired
     public KafkaMessageService(ObjectPool<Consumer<Object, Object>> consumerPool,
-            KafkaProperties kafkaProperties,
-            CacheProperties cacheProperties) {
+            KafkaProperties kafkaProperties) {
         this.consumerPool = consumerPool;
         this.kafkaProperties = kafkaProperties;
-        this.execTimeCache = Caffeine.newBuilder()
-                .maximumSize(cacheProperties.getMaxSize())
-                .expireAfterWrite(Duration.ofMinutes(cacheProperties.getExecTimeTtlMinutes()))
-                .build();
-        logger.info("KafkaMessageService initialized with consumer pool and cache (maxSize={}, ttl={}min)",
-                cacheProperties.getMaxSize(), cacheProperties.getExecTimeTtlMinutes());
+        logger.info("KafkaMessageService initialized with consumer pool");
     }
 
     public List<MessageDto> getMessagesForExecution(List<String> topics, String execId) {
@@ -52,16 +43,11 @@ public class KafkaMessageService {
         return getMessagesInternal(topics, times.start(), times.end(), execId);
     }
 
-    private record ExecTime(Instant start, Instant end) {
+    public record ExecTime(Instant start, Instant end) {
     }
 
-    private ExecTime findExecutionTimes(String execId) {
-        ExecTime cached = execTimeCache.getIfPresent(execId);
-        if (cached != null) {
-            logger.debug("Cache hit for execution ID: {}", execId);
-            return cached;
-        }
-
+    @Cacheable(value = "execTimes", key = "#execId")
+    protected ExecTime findExecutionTimes(String execId) {
         logger.debug("Cache miss for execution ID: {}, scanning execids topic", execId);
 
         Consumer<Object, Object> consumer = null;
@@ -101,7 +87,6 @@ public class KafkaMessageService {
             }
 
             var execTime = new ExecTime(startTime, endTime);
-            execTimeCache.put(execId, execTime);
             logger.info("Found execution times for {}: start={}, end={}", execId, startTime, endTime);
             return execTime;
 

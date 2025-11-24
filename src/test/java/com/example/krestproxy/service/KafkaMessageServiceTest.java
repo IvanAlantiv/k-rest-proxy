@@ -1,6 +1,5 @@
 package com.example.krestproxy.service;
 
-import com.example.krestproxy.config.CacheProperties;
 import com.example.krestproxy.config.KafkaProperties;
 import com.example.krestproxy.dto.MessageDto;
 import org.apache.avro.Schema;
@@ -36,18 +35,13 @@ class KafkaMessageServiceTest {
         @Mock
         private KafkaProperties kafkaProperties;
 
-        @Mock
-        private CacheProperties cacheProperties;
-
         private KafkaMessageService kafkaMessageService;
 
         @BeforeEach
         void setUp() throws Exception {
                 when(kafkaProperties.getMaxMessagesPerRequest()).thenReturn(10000);
                 when(kafkaProperties.getPollTimeoutMs()).thenReturn(100L);
-                when(cacheProperties.getMaxSize()).thenReturn(1000);
-                when(cacheProperties.getExecTimeTtlMinutes()).thenReturn(60);
-                kafkaMessageService = new KafkaMessageService(consumerPool, kafkaProperties, cacheProperties);
+                kafkaMessageService = new KafkaMessageService(consumerPool, kafkaProperties);
         }
 
         @Test
