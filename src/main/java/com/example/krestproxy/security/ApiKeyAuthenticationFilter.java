@@ -33,9 +33,8 @@ public class ApiKeyAuthenticationFilter extends OncePerRequestFilter {
         String requestUri = request.getRequestURI();
         String clientIp = getClientIp(request);
 
-        if (apiKey == null || !apiKey.equals(validApiKey)) {
-            logger.warn("Authentication failed for {} from IP: {}, reason: {}",
-                    requestUri, clientIp, apiKey == null ? "missing API key" : "invalid API key");
+        if (apiKey == null || !constantTimeEquals(apiKey, validApiKey)) {
+            logger.warn("Authentication failed for {} from IP: {}", requestUri, clientIp);
             response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
             response.getWriter().write("Unauthorized");
             return;
@@ -46,6 +45,29 @@ public class ApiKeyAuthenticationFilter extends OncePerRequestFilter {
                 new UsernamePasswordAuthenticationToken(apiKey, null, AuthorityUtils.NO_AUTHORITIES));
 
         filterChain.doFilter(request, response);
+    }
+
+    /**
+     * Constant-time comparison to prevent timing attacks.
+     */
+    private boolean constantTimeEquals(String a, String b) {
+        if (a == null || b == null) {
+            return false;
+        }
+
+        byte[] aBytes = a.getBytes();
+        byte[] bBytes = b.getBytes();
+
+        if (aBytes.length != bBytes.length) {
+            return false;
+        }
+
+        int result = 0;
+        for (int i = 0; i < aBytes.length; i++) {
+            result |= aBytes[i] ^ bBytes[i];
+        }
+
+        return result == 0;
     }
 
     private String getClientIp(HttpServletRequest request) {

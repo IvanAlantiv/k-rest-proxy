@@ -26,11 +26,20 @@ public class SecurityConfig {
     public SecurityFilterChain filterChain(HttpSecurity http) throws Exception {
         http
                 .csrf(AbstractHttpConfigurer::disable)
+                .headers(headers -> headers
+                        .contentTypeOptions(contentType -> contentType.disable())
+                        .xssProtection(xss -> xss.disable())
+                        .frameOptions(frame -> frame.deny())
+                        .httpStrictTransportSecurity(hsts -> hsts
+                                .includeSubDomains(true)
+                                .maxAgeInSeconds(31536000)))
                 .authorizeHttpRequests(auth -> auth
+                        .requestMatchers("/actuator/health", "/actuator/health/**").permitAll()
                         .anyRequest().authenticated())
                 .addFilterBefore(apiKeyAuthenticationFilter,
                         org.springframework.security.web.access.intercept.AuthorizationFilter.class);
 
+        logger.info("Security filter chain configured with headers and health endpoint exclusions");
         return http.build();
     }
 }

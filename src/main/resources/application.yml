@@ -21,3 +21,30 @@ spring:
 app:
   security:
     api-key: "secret-api-key" # Change this in production
+  kafka:
+    poll-timeout-ms: 100
+    max-messages-per-request: 10000
+    consumer-pool:
+      max-total: 10
+      max-idle: 5
+      min-idle: 1
+  cache:
+    exec-time-ttl-minutes: 60
+    max-size: 1000
+
+# Management/Actuator Configuration
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus,metrics
+  endpoint:
+    health:
+      show-details: when-authorized
+  health:
+    defaults:
+      enabled: true
+  metrics:
+    export:
+      prometheus:
+        enabled: true
