@@ -50,6 +50,37 @@ mvn test
 mvn verify
 ```
 
+### Run Performance Tests
+
+The project includes Gatling performance tests in `src/gatling/java`. You can run them using Maven.
+
+**Prerequisites:** The application and Kafka environment must be running (e.g., via `docker-compose` or locally) and accessible.
+
+```bash
+mvn gatling:test
+```
+
+**Configuration:**
+You can configure the test parameters using system properties (`-Dproperty=value`):
+
+| Property | Description | Default |
+| :--- | :--- | :--- |
+| `baseUrl` | Base URL of the application | `https://localhost:8443` |
+| `apiKey` | API Key for authentication | `default-api-key` |
+| `topic` | Kafka topic to query | `test-topic` |
+| `execId` | Execution ID for filtering | `test-exec-id` |
+| `startTime` | Start of time window (ISO 8601) | 1 hour ago |
+| `endTime` | End of time window (ISO 8601) | Now |
+
+**Example:**
+
+```bash
+mvn gatling:test \
+    -DbaseUrl=https://localhost:8443 \
+    -DapiKey=my-secret-key \
+    -Dtopic=my-data-topic
+```
+
 ## Run Locally
 
 ### 1. Start Dependencies
