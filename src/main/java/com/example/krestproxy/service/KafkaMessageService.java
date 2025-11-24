@@ -1,15 +1,20 @@
 package com.example.krestproxy.service;
 
 import com.example.krestproxy.dto.MessageDto;
+import com.example.krestproxy.exception.ExecutionNotFoundException;
+import com.example.krestproxy.exception.KafkaOperationException;
 import org.apache.avro.generic.GenericRecord;
 import org.apache.commons.pool2.ObjectPool;
 import org.apache.kafka.clients.consumer.Consumer;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.clients.consumer.OffsetAndTimestamp;
 import org.apache.kafka.common.TopicPartition;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
@@ -21,6 +26,7 @@ import java.util.concurrent.ConcurrentHashMap;
 @Service
 public class KafkaMessageService {
 
+    private static final Logger logger = LoggerFactory.getLogger(KafkaMessageService.class);
     private static final String EXEC_IDS_TOPIC = "execids";
     private final ObjectPool<Consumer<Object, Object>> consumerPool;
     private final Map<String, ExecTime> execTimeCache = new ConcurrentHashMap<>();
@@ -28,9 +34,11 @@ public class KafkaMessageService {
     @Autowired
     public KafkaMessageService(ObjectPool<Consumer<Object, Object>> consumerPool) {
         this.consumerPool = consumerPool;
+        logger.info("KafkaMessageService initialized with consumer pool");
     }
 
     public List<MessageDto> getMessagesForExecution(List<String> topics, String execId) {
+        logger.info("Fetching messages for execution: {}, topics: {}", execId, topics);
         var times = findExecutionTimes(execId);
         return getMessagesInternal(topics, times.start(), times.end(), execId);
     }
@@ -40,8 +48,11 @@ public class KafkaMessageService {
 
     private ExecTime findExecutionTimes(String execId) {
         if (execTimeCache.containsKey(execId)) {
+            logger.debug("Cache hit for execution ID: {}", execId);
             return execTimeCache.get(execId);
         }
+
+        logger.debug("Cache miss for execution ID: {}, scanning execids topic", execId);
 
         Consumer<Object, Object> consumer = null;
         try {
@@ -75,39 +86,46 @@ public class KafkaMessageService {
             }
 
             if (startTime == null || endTime == null) {
-                throw new RuntimeException("Could not find start and/or end time for execution ID: " + execId);
+                logger.warn("Execution ID not found: {}", execId);
+                throw new ExecutionNotFoundException(execId);
             }
 
             var execTime = new ExecTime(startTime, endTime);
             execTimeCache.put(execId, execTime);
+            logger.info("Found execution times for {}: start={}, end={}", execId, startTime, endTime);
             return execTime;
 
+        } catch (ExecutionNotFoundException e) {
+            throw e;
         } catch (Exception e) {
-            if (e instanceof RuntimeException re) {
-                throw re;
-            }
-            throw new RuntimeException("Error scanning execids topic", e);
+            logger.error("Error scanning execids topic for execution ID: {}", execId, e);
+            throw new KafkaOperationException("Error scanning execids topic", e);
         } finally {
             if (consumer != null) {
                 try {
                     consumerPool.returnObject(consumer);
                 } catch (Exception e) {
-                    // Log error
+                    logger.error("Error returning consumer to pool", e);
                 }
             }
         }
     }
 
     public List<MessageDto> getMessages(String topic, Instant startTime, Instant endTime) {
+        logger.info("Fetching messages from topic: {}, startTime: {}, endTime: {}", topic, startTime, endTime);
         return getMessagesInternal(List.of(topic), startTime, endTime, null);
     }
 
     public List<MessageDto> getMessagesWithExecId(String topic, Instant startTime, Instant endTime, String execId) {
+        logger.info("Fetching messages from topic: {} with execId: {}, startTime: {}, endTime: {}",
+                topic, execId, startTime, endTime);
         return getMessagesInternal(List.of(topic), startTime, endTime, execId);
     }
 
     public List<MessageDto> getMessagesFromTopics(List<String> topics, Instant startTime, Instant endTime,
             String execId) {
+        logger.info("Fetching messages from topics: {} with execId: {}, startTime: {}, endTime: {}",
+                topics, execId, startTime, endTime);
         return getMessagesInternal(topics, startTime, endTime, execId);
     }
 
@@ -115,6 +133,7 @@ public class KafkaMessageService {
             Instant endTime, String execId) {
         Consumer<Object, Object> consumer = null;
         try {
+            logger.debug("Borrowing consumer from pool");
             consumer = consumerPool.borrowObject();
 
             var partitions = new ArrayList<TopicPartition>();
@@ -212,15 +231,17 @@ public class KafkaMessageService {
                     }
                 }
             }
+            logger.info("Retrieved {} messages from topics: {}", messages.size(), topics);
             return messages;
         } catch (Exception e) {
-            throw new RuntimeException("Error fetching messages from Kafka", e);
+            logger.error("Error fetching messages from Kafka topics: {}", topics, e);
+            throw new KafkaOperationException("Error fetching messages from Kafka", e);
         } finally {
             if (consumer != null) {
                 try {
                     consumerPool.returnObject(consumer);
                 } catch (Exception e) {
-                    // Log error returning to pool
+                    logger.error("Error returning consumer to pool", e);
                 }
             }
         }
@@ -235,9 +256,10 @@ public class KafkaMessageService {
                     record.getSchema());
             writer.write(record, jsonEncoder);
             jsonEncoder.flush();
-            return outputStream.toString();
+            return outputStream.toString(StandardCharsets.UTF_8);
         } catch (java.io.IOException e) {
-            throw new RuntimeException("Error converting Avro to JSON", e);
+            logger.error("Error converting Avro to JSON", e);
+            throw new KafkaOperationException("Error converting Avro to JSON", e);
         }
     }
 }

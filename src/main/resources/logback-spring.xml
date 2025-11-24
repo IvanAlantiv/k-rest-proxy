@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<configuration>
+    <property name="LOG_PATTERN" value="%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg%n"/>
+    
+    <!-- Console Appender for Development -->
+    <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
+        <encoder>
+            <pattern>${LOG_PATTERN}</pattern>
+        </encoder>
+    </appender>
+    
+    <!-- JSON Appender for Production -->
+    <appender name="JSON" class="ch.qos.logback.core.ConsoleAppender">
+        <encoder class="net.logstash.logback.encoder.LogstashEncoder">
+            <includeMdc>true</includeMdc>
+            <includeContext>true</includeContext>
+            <includeCallerData>false</includeCallerData>
+        </encoder>
+    </appender>
+    
+    <!-- Application Loggers -->
+    <logger name="com.example.krestproxy" level="INFO"/>
+    
+    <!-- Kafka Loggers -->
+    <logger name="org.apache.kafka" level="WARN"/>
+    
+    <!-- Spring Loggers -->
+    <logger name="org.springframework" level="INFO"/>
+    <logger name="org.springframework.web" level="INFO"/>
+    <logger name="org.springframework.security" level="INFO"/>
+    
+    <!-- Root Logger -->
+    <root level="INFO">
+        <appender-ref ref="${LOGGING_APPENDER:-CONSOLE}"/>
+    </root>
+</configuration>
