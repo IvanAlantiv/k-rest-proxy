@@ -1,13 +1,15 @@
 package com.example.krestproxy.service;
 
+import com.example.krestproxy.config.CacheProperties;
+import com.example.krestproxy.config.KafkaProperties;
 import com.example.krestproxy.dto.MessageDto;
 import com.example.krestproxy.exception.ExecutionNotFoundException;
 import com.example.krestproxy.exception.KafkaOperationException;
+import com.github.benmanes.caffeine.cache.Cache;
+import com.github.benmanes.caffeine.cache.Caffeine;
 import org.apache.avro.generic.GenericRecord;
 import org.apache.commons.pool2.ObjectPool;
 import org.apache.kafka.clients.consumer.Consumer;
-import org.apache.kafka.clients.consumer.ConsumerRecord;
-import org.apache.kafka.clients.consumer.OffsetAndTimestamp;
 import org.apache.kafka.common.TopicPartition;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -20,8 +22,6 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
-import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
 
 @Service
 public class KafkaMessageService {
@@ -29,12 +29,21 @@ public class KafkaMessageService {
     private static final Logger logger = LoggerFactory.getLogger(KafkaMessageService.class);
     private static final String EXEC_IDS_TOPIC = "execids";
     private final ObjectPool<Consumer<Object, Object>> consumerPool;
-    private final Map<String, ExecTime> execTimeCache = new ConcurrentHashMap<>();
+    private final KafkaProperties kafkaProperties;
+    private final Cache<String, ExecTime> execTimeCache;
 
     @Autowired
-    public KafkaMessageService(ObjectPool<Consumer<Object, Object>> consumerPool) {
+    public KafkaMessageService(ObjectPool<Consumer<Object, Object>> consumerPool,
+            KafkaProperties kafkaProperties,
+            CacheProperties cacheProperties) {
         this.consumerPool = consumerPool;
-        logger.info("KafkaMessageService initialized with consumer pool");
+        this.kafkaProperties = kafkaProperties;
+        this.execTimeCache = Caffeine.newBuilder()
+                .maximumSize(cacheProperties.getMaxSize())
+                .expireAfterWrite(Duration.ofMinutes(cacheProperties.getExecTimeTtlMinutes()))
+                .build();
+        logger.info("KafkaMessageService initialized with consumer pool and cache (maxSize={}, ttl={}min)",
+                cacheProperties.getMaxSize(), cacheProperties.getExecTimeTtlMinutes());
     }
 
     public List<MessageDto> getMessagesForExecution(List<String> topics, String execId) {
@@ -47,9 +56,10 @@ public class KafkaMessageService {
     }
 
     private ExecTime findExecutionTimes(String execId) {
-        if (execTimeCache.containsKey(execId)) {
+        ExecTime cached = execTimeCache.getIfPresent(execId);
+        if (cached != null) {
             logger.debug("Cache hit for execution ID: {}", execId);
-            return execTimeCache.get(execId);
+            return cached;
         }
 
         logger.debug("Cache miss for execution ID: {}, scanning execids topic", execId);
@@ -67,7 +77,7 @@ public class KafkaMessageService {
             // Assuming "few days" retention isn't massive, but we should be careful.
             // We scan until we find both or reach end.
             while (startTime == null || endTime == null) {
-                var records = consumer.poll(Duration.ofMillis(100));
+                var records = consumer.poll(Duration.ofMillis(kafkaProperties.getPollTimeoutMs()));
                 if (records.isEmpty()) {
                     break;
                 }
@@ -165,6 +175,7 @@ public class KafkaMessageService {
             var endOffsets = consumer.offsetsForTimes(endTimestampsToSearch);
 
             var messages = new ArrayList<MessageDto>();
+            int maxMessages = kafkaProperties.getMaxMessagesPerRequest();
 
             for (var partition : partitions) {
                 var startOffset = startOffsets.get(partition);
@@ -175,7 +186,7 @@ public class KafkaMessageService {
 
                     var keepReading = true;
                     while (keepReading) {
-                        var records = consumer.poll(Duration.ofMillis(100));
+                        var records = consumer.poll(Duration.ofMillis(kafkaProperties.getPollTimeoutMs()));
                         if (records.isEmpty()) {
                             break;
                         }
@@ -210,6 +221,14 @@ public class KafkaMessageService {
                                             record.timestamp(),
                                             record.partition(),
                                             record.offset()));
+
+                                    // Check if we've reached the maximum message limit
+                                    if (messages.size() >= maxMessages) {
+                                        logger.warn("Reached maximum message limit of {} for topics: {}", maxMessages,
+                                                topics);
+                                        keepReading = false;
+                                        break;
+                                    }
                                 }
 
                             } else if (record.timestamp() > endTime.toEpochMilli()) {
@@ -229,6 +248,11 @@ public class KafkaMessageService {
                             keepReading = false;
                         }
                     }
+                }
+
+                // Stop processing additional partitions if we've reached the message limit
+                if (messages.size() >= maxMessages) {
+                    break;
                 }
             }
             logger.info("Retrieved {} messages from topics: {}", messages.size(), topics);
