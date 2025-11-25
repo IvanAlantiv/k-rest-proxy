@@ -20,9 +20,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.*;
 
-import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertNotNull;
-import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.*;
 
@@ -99,6 +97,7 @@ class KafkaMessageServiceTest {
                 assertEquals(topic, messages.get(0).topicName());
                 assertEquals("msg2", messages.get(1).content());
                 assertEquals(topic, messages.get(1).topicName());
+                assertFalse(response.hasMore());
 
                 verify(consumer).assign(Collections.singletonList(partition0));
                 verify(consumer).seek(partition0, 0L);
@@ -170,6 +169,7 @@ class KafkaMessageServiceTest {
                 assertEquals(1, messages.size());
                 assertEquals("msg1", messages.get(0).content());
                 assertEquals(topic, messages.get(0).topicName());
+                assertFalse(response.hasMore());
 
                 verify(consumerPool).returnObject(consumer);
         }
@@ -397,6 +397,7 @@ class KafkaMessageServiceTest {
                 assertEquals(2, messages.size());
                 assertEquals("msg1", messages.get(0).content());
                 assertEquals("msg2", messages.get(1).content());
+                assertTrue(response.hasMore());
                 assertNotNull(response.nextCursor());
 
                 verify(consumer).assign(Collections.singletonList(partition0));
@@ -448,9 +449,55 @@ class KafkaMessageServiceTest {
                 assertEquals(1, messages.size());
                 assertEquals("msg5", messages.get(0).content());
                 assertEquals(5L, messages.get(0).offset());
+                assertFalse(response.hasMore());
 
                 verify(consumer).assign(Collections.singletonList(partition0));
                 verify(consumer).seek(partition0, 5L); // Verify seek used cursor offset
                 verify(consumerPool).returnObject(consumer);
+        }
+
+        @Test
+        void getMessages_shouldSetHasMoreFlagCorrectly_whenMoreMessagesExist() throws Exception {
+                String topic = "test-has-more";
+                Instant startTime = Instant.parse("2023-01-01T10:00:00Z");
+                Instant endTime = Instant.parse("2023-01-01T10:05:00Z");
+                TopicPartition partition0 = new TopicPartition(topic, 0);
+
+                when(kafkaProperties.getMaxMessagesPerRequest()).thenReturn(1);
+                when(consumerPool.borrowObject()).thenReturn(consumer);
+                when(consumer.partitionsFor(topic)).thenReturn(
+                                Collections.singletonList(
+                                                new org.apache.kafka.common.PartitionInfo(topic, 0, null, null, null)));
+
+                Map<TopicPartition, OffsetAndTimestamp> startOffsets = new HashMap<>();
+                startOffsets.put(partition0, new OffsetAndTimestamp(0L, startTime.toEpochMilli()));
+                when(consumer.offsetsForTimes(any())).thenReturn(startOffsets);
+
+                Map<TopicPartition, OffsetAndTimestamp> endOffsets = new HashMap<>();
+                endOffsets.put(partition0, new OffsetAndTimestamp(10L, endTime.toEpochMilli()));
+                when(consumer.offsetsForTimes(
+                                argThat(map -> map.get(partition0) == endTime.toEpochMilli())))
+                                .thenReturn(endOffsets);
+
+                ConsumerRecord<Object, Object> record1 = new ConsumerRecord<>(topic, 0, 0L, startTime.toEpochMilli(),
+                                org.apache.kafka.common.record.TimestampType.CREATE_TIME, 0, 0, "key", "msg1",
+                                new org.apache.kafka.common.header.internals.RecordHeaders(), Optional.empty());
+                ConsumerRecord<Object, Object> record2 = new ConsumerRecord<>(topic, 0, 1L,
+                                startTime.toEpochMilli() + 1000,
+                                org.apache.kafka.common.record.TimestampType.CREATE_TIME, 0, 0, "key", "msg2",
+                                new org.apache.kafka.common.header.internals.RecordHeaders(), Optional.empty());
+
+                Map<TopicPartition, List<ConsumerRecord<Object, Object>>> recordsMap = new HashMap<>();
+                recordsMap.put(partition0, Arrays.asList(record1, record2));
+                ConsumerRecords<Object, Object> records = new ConsumerRecords<>(recordsMap);
+
+                when(consumer.poll(any())).thenReturn(records);
+
+                PaginatedResponse<MessageDto> response = kafkaMessageService.getMessages(topic, startTime,
+                                endTime, null);
+
+                assertEquals(1, response.data().size());
+                assertTrue(response.hasMore());
+                assertNotNull(response.nextCursor());
         }
 }

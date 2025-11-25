@@ -292,10 +292,38 @@ public class KafkaMessageService {
                 }
             }
 
-            String nextCursor = limitReached ? CursorUtil.createCursor(nextCursorOffsets) : null;
+            boolean hasMore = false;
+            if (limitReached) {
+                for (var partition : partitions) {
+                    var endOffsetRecord = endOffsets.get(partition);
+                    if (endOffsetRecord == null) {
+                        continue; // No messages in the time range for this partition
+                    }
+                    var endOffset = endOffsetRecord.offset();
+
+                    Long currentPosition = nextCursorOffsets.get(partition.partition());
+
+                    if (currentPosition == null) {
+                        // This partition hasn't been read from yet.
+                        // We need to find its starting offset for this request.
+                        if (cursorOffsets != null && cursorOffsets.containsKey(partition.partition())) {
+                            currentPosition = cursorOffsets.get(partition.partition());
+                        } else if (startOffsets != null && startOffsets.get(partition) != null) {
+                            currentPosition = startOffsets.get(partition).offset();
+                        }
+                    }
+
+                    if (currentPosition != null && currentPosition < endOffset) {
+                        hasMore = true;
+                        break;
+                    }
+                }
+            }
+
+            String nextCursor = hasMore ? CursorUtil.createCursor(nextCursorOffsets) : null;
 
             logger.info("Retrieved {} messages from topics: {}", messages.size(), topics);
-            return new PaginatedResponse<>(messages, nextCursor);
+            return new PaginatedResponse<>(messages, nextCursor, hasMore);
         } catch (Exception e) {
             logger.error("Error fetching messages from Kafka topics: {}", topics, e);
             throw new KafkaOperationException("Error fetching messages from Kafka", e);
